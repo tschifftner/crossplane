@@ -40,7 +40,7 @@ of Crossplane managed resources. Following is an example of a managed resource:
 <div class="tab-content">
 <div class="tab-pane fade in active" id="aws-tab-1" markdown="1">
 
-The AWS provider supports provisioning an [RDS] instance via the `RDSInstance`
+The AWS provider supports provisioning an [RDS][rds] instance via the `RDSInstance`
 managed resource it adds to Crossplane.
 
 ```yaml
@@ -90,7 +90,7 @@ kubectl delete rdsinstance rdspostgresql
 </div>
 <div class="tab-pane fade" id="gcp-tab-1" markdown="1">
 
-The GCP provider supports provisioning a [CloudSQL] instance with the
+The GCP provider supports provisioning a [CloudSQL][cloudsql] instance with the
 `CloudSQLInstance` managed resource it adds to Crossplane.
 
 ```yaml
@@ -458,13 +458,13 @@ using needs to store `annotations` and `spec` fields, which most tools do
 including Velero.
 
 [term-xrm]: terminology.md#crossplane-resource-model
+[rds]: https://aws.amazon.com/rds/
+[cloudsql]: https://cloud.google.com/sql
 [composition]: composition.md
-[api-versioning]:
-    https://kubernetes.io/docs/reference/using-api/api-overview/#api-versioning
+[api-versioning]: https://kubernetes.io/docs/reference/using-api/api-overview/#api-versioning
 [velero]: https://velero.io/
 [api-reference]: ../api-docs/overview.md
 [provider]: providers.md
 [issue-727]: https://github.com/crossplane/crossplane/issues/727
 [issue-1143]: https://github.com/crossplane/crossplane/issues/1143
-[managed-api-patterns]:
-    https://github.com/crossplane/crossplane/blob/master/design/one-pager-managed-resource-api-design.md
+[managed-api-patterns]: https://github.com/crossplane/crossplane/blob/master/design/one-pager-managed-resource-api-design.md

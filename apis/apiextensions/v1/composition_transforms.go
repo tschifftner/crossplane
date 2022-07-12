@@ -21,10 +21,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
+	"k8s.io/utils/pointer"
 )
 
 const (
@@ -40,12 +42,16 @@ const (
 	errFmtMapTypeNotSupported          = "type %s is not supported for map transform"
 	errFmtMapNotFound                  = "key %s is not found in map"
 
-	errStringTransformTypeFailed  = "type %s is not supported for string transform type"
-	errStringTransformTypeFormat  = "string transform of type %s fmt is not set"
-	errStringTransformTypeConvert = "string transform of type %s convert is not set"
-	errStringTransformTypeTrim    = "string transform of type %s trim is not set"
-	errStringConvertTypeFailed    = "type %s is not supported for string convert"
-	errDecodeString               = "string is not valid base64"
+	errStringTransformTypeFailed        = "type %s is not supported for string transform type"
+	errStringTransformTypeFormat        = "string transform of type %s fmt is not set"
+	errStringTransformTypeConvert       = "string transform of type %s convert is not set"
+	errStringTransformTypeTrim          = "string transform of type %s trim is not set"
+	errStringTransformTypeRegexp        = "string transform of type %s regexp is not set"
+	errStringTransformTypeRegexpFailed  = "could not compile regexp"
+	errStringTransformTypeRegexpNoMatch = "regexp %q had no matches for group %d"
+	errStringConvertTypeFailed          = "type %s is not supported for string convert"
+
+	errDecodeString = "string is not valid base64"
 )
 
 // TransformType is type of the transform function to be chosen.
@@ -176,26 +182,27 @@ func (m *MapTransform) Resolve(input interface{}) (interface{}, error) {
 	}
 }
 
-// StringTransformType is type of the string transform function to be executed fmt/convert.
+// StringTransformType transforms a string.
 type StringTransformType string
 
-// Accepted StringTransformType.
+// Accepted StringTransformTypes.
 const (
-	StringTransformFormat     StringTransformType = "Format" // Default
-	StringTransformConvert    StringTransformType = "Convert"
-	StringTransformTrimPrefix StringTransformType = "TrimPrefix"
-	StringTransformTrimSuffix StringTransformType = "TrimSuffix"
+	StringTransformTypeFormat     StringTransformType = "Format" // Default
+	StringTransformTypeConvert    StringTransformType = "Convert"
+	StringTransformTypeTrimPrefix StringTransformType = "TrimPrefix"
+	StringTransformTypeTrimSuffix StringTransformType = "TrimSuffix"
+	StringTransformTypeRegexp     StringTransformType = "Regexp"
 )
 
-// StringConversionType is the type of string conversion, ToUpper/ToLower/ToBase64/FromBase64
+// StringConversionType converts a string.
 type StringConversionType string
 
-// ConversionType accepted values.
+// Accepted StringConversionTypes.
 const (
-	ConversionTypeToUpper    = "ToUpper"
-	ConversionTypeToLower    = "ToLower"
-	ConversionTypeToBase64   = "ToBase64"
-	ConversionTypeFromBase64 = "FromBase64"
+	StringConversionTypeToUpper    StringConversionType = "ToUpper"
+	StringConversionTypeToLower    StringConversionType = "ToLower"
+	StringConversionTypeToBase64   StringConversionType = "ToBase64"
+	StringConversionTypeFromBase64 StringConversionType = "FromBase64"
 )
 
 // A StringTransform returns a string given the supplied input.
@@ -203,7 +210,7 @@ type StringTransform struct {
 
 	// Type of the string transform to be run.
 	// +optional
-	// +kubebuilder:validation:Enum=Format;Convert;TrimPrefix;TrimSuffix
+	// +kubebuilder:validation:Enum=Format;Convert;TrimPrefix;TrimSuffix;Regexp
 	// +kubebuilder:default=Format
 	Type StringTransformType `json:"type,omitempty"`
 
@@ -220,28 +227,49 @@ type StringTransform struct {
 	// Trim the prefix or suffix from the input
 	// +optional
 	Trim *string `json:"trim,omitempty"`
+
+	// Extract a match from the input using a regular expression.
+	// +optional
+	Regexp *StringTransformRegexp `json:"regexp,omitempty"`
+}
+
+// A StringTransformRegexp extracts a match from the input using a regular
+// expression.
+type StringTransformRegexp struct {
+	// Match string. May optionally include submatches, aka capture groups.
+	// See https://pkg.go.dev/regexp/ for details.
+	Match string `json:"match"`
+
+	// Group number to match. 0 (the default) matches the entire expression.
+	// +optional
+	Group *int `json:"group,omitempty"`
 }
 
 // Resolve runs the String transform.
 func (s *StringTransform) Resolve(input interface{}) (interface{}, error) {
 
 	switch s.Type {
-	case StringTransformFormat:
+	case StringTransformTypeFormat:
 		if s.Format == nil {
 			return nil, errors.Errorf(errStringTransformTypeFormat, string(s.Type))
 		}
 		return fmt.Sprintf(*s.Format, input), nil
-	case StringTransformConvert:
+	case StringTransformTypeConvert:
 		if s.Convert == nil {
 			return nil, errors.Errorf(errStringTransformTypeConvert, string(s.Type))
 		}
 		return stringConvertTransform(input, s.Convert)
 
-	case StringTransformTrimPrefix, StringTransformTrimSuffix:
+	case StringTransformTypeTrimPrefix, StringTransformTypeTrimSuffix:
 		if s.Trim == nil {
 			return nil, errors.Errorf(errStringTransformTypeTrim, string(s.Type))
 		}
 		return stringTrimTransform(input, s.Type, *s.Trim), nil
+	case StringTransformTypeRegexp:
+		if s.Regexp == nil {
+			return nil, errors.Errorf(errStringTransformTypeRegexp, string(s.Type))
+		}
+		return stringRegexpTransform(input, *s.Regexp)
 	default:
 		return nil, errors.Errorf(errStringTransformTypeFailed, string(s.Type))
 	}
@@ -250,13 +278,13 @@ func (s *StringTransform) Resolve(input interface{}) (interface{}, error) {
 func stringConvertTransform(input interface{}, t *StringConversionType) (interface{}, error) {
 	str := fmt.Sprintf("%v", input)
 	switch *t {
-	case ConversionTypeToUpper:
+	case StringConversionTypeToUpper:
 		return strings.ToUpper(str), nil
-	case ConversionTypeToLower:
+	case StringConversionTypeToLower:
 		return strings.ToLower(str), nil
-	case ConversionTypeToBase64:
+	case StringConversionTypeToBase64:
 		return base64.StdEncoding.EncodeToString([]byte(str)), nil
-	case ConversionTypeFromBase64:
+	case StringConversionTypeFromBase64:
 		s, err := base64.StdEncoding.DecodeString(str)
 		return string(s), errors.Wrap(err, errDecodeString)
 	default:
@@ -266,13 +294,30 @@ func stringConvertTransform(input interface{}, t *StringConversionType) (interfa
 
 func stringTrimTransform(input interface{}, t StringTransformType, trim string) string {
 	str := fmt.Sprintf("%v", input)
-	if t == StringTransformTrimPrefix {
+	if t == StringTransformTypeTrimPrefix {
 		return strings.TrimPrefix(str, trim)
 	}
-	if t == StringTransformTrimSuffix {
+	if t == StringTransformTypeTrimSuffix {
 		return strings.TrimSuffix(str, trim)
 	}
 	return str
+}
+
+func stringRegexpTransform(input interface{}, r StringTransformRegexp) (interface{}, error) {
+	re, err := regexp.Compile(r.Match)
+	if err != nil {
+		return nil, errors.Wrap(err, errStringTransformTypeRegexpFailed)
+	}
+
+	groups := re.FindStringSubmatch(fmt.Sprintf("%v", input))
+
+	// Return the entire match (group zero) by default.
+	g := pointer.IntDeref(r.Group, 0)
+	if len(groups) == 0 || g >= len(groups) {
+		return nil, errors.Errorf(errStringTransformTypeRegexpNoMatch, r.Match, g)
+	}
+
+	return groups[g], nil
 }
 
 // The list of supported ConvertTransform input and output types.
